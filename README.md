@@ -10,3 +10,5 @@ Rendered objects are interactive; so, you can click and drag to change the orien
 
 • [2D Lissajous curve generator](https://daoneil.github.io/CodexExperiments/20230118_AI_authored_Lissajous_curve_generator.html)
   For a & b enter small consecutive numbers, such as 3 & 4, or 5 & 6. For 'width' enter 0.01, 0.02, or 0.03.
+  
+ • [3D Lissajous curve](https://daoneil.github.io/CodexExperiments/20230124_AI_authored_BabylonJS_for_3D_Lissajous_curve.html)
