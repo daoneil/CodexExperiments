@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Mandelbulb Viewer</title>
+    <style>
+        /* Set the canvas to expand to fill the window */
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        #renderCanvas {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+	<script src="https://cdn.babylonjs.com/babylon.js">	</script>
+</head>
+<body>
+    <canvas id="renderCanvas"></canvas>
+
+    <script>
+// Define the power-nine Mandelbulb SDF
+function mandelbulbSDF(position, iterations, power) {
+    let z = position;
+    let dr = 1.0;
+    let r = 0.0;
+    for (let i = 0; i < iterations; i++) {
+        r = length(z);
+        if (r > 2.0) break;
+
+        // Convert to polar coordinates
+        let theta = Math.acos(z.z / r);
+        let phi = Math.atan2(z.y, z.x);
+        dr = Math.pow(r, power - 1.0) * power * dr + 1.0;
+
+        // Scale and rotate the point
+        let zr = Math.pow(r, power);
+        theta *= power;
+        phi *= power;
+
+        // Convert back to Cartesian coordinates
+        z = zr * sin(theta) * cos(phi);
+        z.y = zr * sin(phi) * sin(theta);
+        z.z = zr * cos(theta);
+    }
+    return 0.5 * Math.log(r) * r / dr;
+}
+
+// Raymarching algorithm to render the SDF
+function rayMarch(origin, direction, maxSteps, maxDistance) {
+    let depth = 0.0;
+    for (let i = 0; i < maxSteps; i++) {
+        let p = origin + direction * depth;
+        let dist = mandelbulbSDF(p, 9, 8); // Power-nine Mandelbulb
+        if (dist < EPSILON) { // EPSILON is a small value like 0.001
+            return depth;
+        }
+        depth += dist;
+        if (depth >= maxDistance) {
+            return maxDistance;
+        }
+    }
+    return maxDistance;
+}
+
+// Example usage in a render loop
+function render() {
+    // Set up camera and ray direction here...
+    
+    // For each pixel on the screen
+    for (let x = 0; x < screenWidth; x++) {
+        for (let y = 0; y < screenHeight; y++) {
+            // Calculate ray direction based on camera setup
+            
+            // Perform ray marching
+            let distance = rayMarch(cameraPosition, rayDirection, MAX_STEPS, MAX_DISTANCE);
+            
+            // Determine color based on distance
+            let color = distance < MAX_DISTANCE ? new BABYLON.Color3(1, 1 - distance / MAX_DISTANCE, 1 - distance / MAX_DISTANCE) : new BABYLON.Color3(0, 0, 0);
+            
+            // Draw pixel with color...
+        }
+    }
+}
+	
+        // BabylonJS code goes here
+        // Create the scene
+var canvas = document.getElementById('renderCanvas');
+var engine = new BABYLON.Engine(canvas, true);
+var scene = new BABYLON.Scene(engine);
+
+// Create the first-person camera
+var camera = new BABYLON.FreeCamera("camera1", new BABYLON.Vector3(0, 1.6, -5), scene);
+camera.attachControl(canvas, true);
+camera.keysUp.push(38); // Arrow Up
+camera.keysDown.push(40); // Arrow Down
+camera.keysLeft.push(37); // Arrow Left
+camera.keysRight.push(39); // Arrow Right
+
+// Create a custom render pipeline
+var pipeline = new BABYLON.PostProcessRenderPipeline(engine, "customPipeline");
+
+// Create a post-process and attach it to the camera
+var postProcess = new BABYLON.PostProcess("Mandelbulb", "mandelbulb", ["time"], null, 1.0, camera);
+postProcess.onApply = function(effect) {
+    effect.setFloat("time", performance.now() / 1000);
+};
+
+// The fragment shader for the post-process (simplified)
+postProcess.fragmentShader = `
+precision highp float;
+
+uniform float time;
+varying vec2 vUV;
+
+void main(void) {
+    vec3 camPos = vec3(0.0, 0.0, 0.0); // Camera position
+    vec3 rayDir = normalize(vec3(vUV - 0.5, 1.0)); // Ray direction
+    
+    // Perform ray marching using mandelbulbSDF
+    float distance = rayMarch(camPos, rayDir, 100, 100.0);
+    
+    // Determine color based on distance
+    gl_FragColor = distance < 100.0 ? vec4(1.0, 1.0 - distance / 100.0, 1.0 - distance / 100.0, 1.0) : vec4(0.0, 0.0, 0.0, 1.0);
+}
+`;
+
+// Attach the post-process to the pipeline
+pipeline.addEffect(new BABYLON.PostProcessRenderEffect(engine, "MandelbulbEffect", () => { return postProcess; }));
+
+// Add the pipeline to the scene
+scene.postProcessRenderPipelineManager.addPipeline(pipeline);
+scene.postProcessRenderPipelineManager.attachCamerasToRenderPipeline("customPipeline", camera);
+
+// Render loop
+engine.runRenderLoop(function() {
+    scene.render();
+});
+
+// Resize event
+window.addEventListener('resize', function() {
+    engine.resize();
+});
+
+    </script>
+</body>
+</html>
