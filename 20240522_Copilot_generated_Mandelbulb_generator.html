@@ -105,7 +105,8 @@ camera.keysRight.push(39); // Arrow Right
 var pipeline = new BABYLON.PostProcessRenderPipeline(engine, "customPipeline");
 
 // Create a post-process and attach it to the camera
-var postProcess = new BABYLON.PostProcess("Mandelbulb", "mandelbulb", ["time"], null, 1.0, camera);
+var postProcess = new BABYLON.PostProcess("postProcess", "postProcessShader", null, null, 1.0, camera, BABYLON.Texture.NEAREST_SAMPLINGMODE, engine, true);
+// var postProcess = new BABYLON.PostProcess("Mandelbulb", "mandelbulb", ["time"], null, 1.0, camera);
 postProcess.onApply = function(effect) {
     effect.setFloat("time", performance.now() / 1000);
 };
