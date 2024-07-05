@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mandelbulb WebGPU Renderer</title>
+    <style>
+        body { margin: 0; }
+        canvas { width: 600px; height: 600px; }
+    </style>
+</head>
+<body>
+<!--
+Claude.ai prompt that produced this codde:
+Please write WebGPU shader code, embedded in HTML, that implements a Mandelbulb SDF and a ray marching renderer. 
+Include functions for antialiasing and coloring based on orbit traps. 
+Additionally, include functionality to move the camera around the Mandelbulb.
+-->
+    <canvas id="webgpu-canvas"></canvas>
+    <script type="module">
+        const canvas = document.getElementById('webgpu-canvas');
+        const adapter = await navigator.gpu.requestAdapter();
+        const device = await adapter.requestDevice();
+
+        const context = canvas.getContext('webgpu');
+        const format = navigator.gpu.getPreferredCanvasFormat();
+        context.configure({ device, format });
+
+        const shader = `
+            struct Uniforms {
+                resolution: vec2f,
+                time: f32,
+                cameraPosition: vec3f,
+                cameraTarget: vec3f,
+            }
+            @group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+            const MAX_STEPS: i32 = 100;
+            const MAX_DIST: f32 = 100.0;
+            const SURF_DIST: f32 = 0.001;
+            const MANDELBULB_POWER: f32 = 8.0;
+            const AA_SAMPLES: i32 = 2;
+
+            fn mandelbulbSDF(pos: vec3f) -> f32 {
+                var z = pos;
+                var dr = 1.0;
+                var r = 0.0;
+                for (var i = 0; i < 15; i++) {
+                    r = length(z);
+                    if (r > 2.0) {
+                        break;
+                    }
+                    
+                    var theta = acos(z.z / r);
+                    var phi = atan2(z.y, z.x);
+                    dr = pow(r, MANDELBULB_POWER - 1.0) * MANDELBULB_POWER * dr + 1.0;
+                    
+                    var zr = pow(r, MANDELBULB_POWER);
+                    theta *= MANDELBULB_POWER;
+                    phi *= MANDELBULB_POWER;
+                    
+                    z = zr * vec3f(sin(theta) * cos(phi), sin(phi) * sin(theta), cos(theta));
+                    z += pos;
+                }
+                return 0.5 * log(r) * r / dr;
+            }
+
+            fn rayMarch(ro: vec3f, rd: vec3f) -> f32 {
+                var dO = 0.0;
+                for (var i = 0; i < MAX_STEPS; i++) {
+                    let pos = ro + rd * dO;
+                    let dS = mandelbulbSDF(pos);
+                    dO += dS;
+                    if (dO > MAX_DIST || dS < SURF_DIST) {
+                        break;
+                    }
+                }
+                return dO;
+            }
+
+            fn getNormal(p: vec3f) -> vec3f {
+                let e = vec2f(1.0, -1.0) * 0.5773 * 0.0005;
+                return normalize(
+                    e.xyy * mandelbulbSDF(p + e.xyy) +
+                    e.yyx * mandelbulbSDF(p + e.yyx) +
+                    e.yxy * mandelbulbSDF(p + e.yxy) +
+                    e.xxx * mandelbulbSDF(p + e.xxx)
+                );
+            }
+
+            fn orbitTrap(pos: vec3f) -> vec3f {
+                var z = pos;
+                var trap = vec3f(1000.0);
+                for (var i = 0; i < 15; i++) {
+                    if (length(z) > 2.0) {
+                        break;
+                    }
+                    trap = min(trap, abs(z));
+                    let r = length(z);
+                    var theta = acos(z.z / r);
+                    var phi = atan2(z.y, z.x);
+                    let zr = pow(r, MANDELBULB_POWER);
+                    theta *= MANDELBULB_POWER;
+                    phi *= MANDELBULB_POWER;
+                    z = zr * vec3f(sin(theta) * cos(phi), sin(phi) * sin(theta), cos(theta));
+                    z += pos;
+                }
+                return trap;
+            }
+
+            fn render(uv: vec2f, ro: vec3f, rd: vec3f) -> vec3f {
+                let d = rayMarch(ro, rd);
+                if (d >= MAX_DIST) {
+                    return vec3f(0.05); // Sky color
+                }
+                let p = ro + rd * d;
+                let n = getNormal(p);
+                let trap = orbitTrap(p);
+                
+                // Simple lighting
+                let light = normalize(vec3f(1.0, 1.0, -1.0));
+                let diff = max(dot(n, light), 0.0);
+                
+                // Color based on orbit trap
+                let col = 0.5 + 0.5 * cos(6.2831 * trap);
+                return col * (diff * 0.8 + 0.2);
+            }
+
+            @vertex
+            fn vertexMain(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4f {
+                let x = f32(vertexIndex & 1u) * 2.0 - 1.0;
+                let y = f32(vertexIndex & 2u) - 1.0;
+                return vec4f(x, y, 0.0, 1.0);
+            }
+
+            @fragment
+            fn fragmentMain(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
+                var uv = (fragCoord.xy - 0.5 * uniforms.resolution) / uniforms.resolution.y;
+                
+                let ro = uniforms.cameraPosition;
+                let ta = uniforms.cameraTarget;
+                let up = vec3f(0.0, 1.0, 0.0);
+                
+                // Camera frame
+                let w = normalize(ta - ro);
+                let u = normalize(cross(w, up));
+                let v = cross(u, w);
+                
+                var col = vec3f(0.0);
+                
+                // Antialiasing
+                for (var m = 0; m < AA_SAMPLES; m++) {
+                    for (var n = 0; n < AA_SAMPLES; n++) {
+                        let offset = vec2f(f32(m), f32(n)) / f32(AA_SAMPLES) - 0.5;
+                        let uv2 = uv + offset / uniforms.resolution.y;
+                        let rd = normalize(uv2.x * u + uv2.y * v + 1.5 * w);
+                        col += render(uv2, ro, rd);
+                    }
+                }
+                col /= f32(AA_SAMPLES * AA_SAMPLES);
+                
+                // Tone mapping and gamma correction
+                col = col / (1.0 + col);
+                col = pow(col, vec3f(0.4545));
+                
+                return vec4f(col, 1.0);
+            }
+        `;
+
+        const pipeline = device.createRenderPipeline({
+            layout: 'auto',
+            vertex: {
+                module: device.createShaderModule({ code: shader }),
+                entryPoint: 'vertexMain',
+            },
+            fragment: {
+                module: device.createShaderModule({ code: shader }),
+                entryPoint: 'fragmentMain',
+                targets: [{ format }],
+            },
+            primitive: { topology: 'triangle-strip' },
+        });
+
+        const uniformBuffer = device.createBuffer({
+            size: 48, // 2 floats + 1 float + 3 floats + 3 floats
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
+        const bindGroup = device.createBindGroup({
+            layout: pipeline.getBindGroupLayout(0),
+            entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
+        });
+
+/*
+        var cameraPosition = [3, 3, 3];
+        let cameraTarget = [0, 0, 0];
+
+        function updateCamera(time) {
+            const radius = 3.0;
+            cameraPosition = [
+                Math.sin(time * 0.2) * radius,
+                Math.sin(time * 0.2) * radius + radius * 0.5,
+                Math.cos(time * 0.1) * radius + radius * 0.25
+            ];
+        }
+*/
+        var cameraPosition = [3, 3, 3];
+     //   let cameraTarget = [0, 0, 0];
+		let cameraTarget = [0, -1, 0]; // Slightly below the center of the Mandelbulb
+
+       function updateCamera(time) {
+            const radius = 3.75; // Adjust this value to change the size of the circular path
+            const height = 3.0; // Adjust this value to change the height of the camera
+            const speed = 0.25;  // Adjust this value to change the speed of rotation
+
+            cameraPosition = [
+               Math.sin(time * speed) * radius,
+			   height,			   
+               Math.cos(time * speed) * radius
+            ];
+        }
+        function frame() {
+            const aspect = canvas.width / canvas.height;
+            canvas.width = canvas.clientWidth * devicePixelRatio;
+            canvas.height = canvas.clientHeight * devicePixelRatio;
+
+            const commandEncoder = device.createCommandEncoder();
+            const textureView = context.getCurrentTexture().createView();
+
+            const renderPassDescriptor = {
+                colorAttachments: [{
+                    view: textureView,
+                    clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                    loadOp: 'clear',
+                    storeOp: 'store',
+                }],
+            };
+
+            const time = performance.now() / 1000;
+            updateCamera(time);
+
+            device.queue.writeBuffer(uniformBuffer, 0, new Float32Array([
+                canvas.width, canvas.height,
+                time,
+                ...cameraPosition,
+                ...cameraTarget,
+            ]));
+
+            const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
+            passEncoder.setPipeline(pipeline);
+            passEncoder.setBindGroup(0, bindGroup);
+            passEncoder.draw(4);
+            passEncoder.end();
+
+            device.queue.submit([commandEncoder.finish()]);
+
+            requestAnimationFrame(frame);
+        }
+
+        requestAnimationFrame(frame);
+    </script>
+</body>
+</html>
